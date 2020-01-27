@@ -2,8 +2,8 @@ provider "aws" {
   region = "us-west-2"
 }
 
-resource "aws_security_group" "instance" {
-  name = "terraform-example-instance"
+resource "aws_security_group" "ec2-sg" {
+  name = "ec2 security group"
 
   ingress {
     from_port   = 8080
@@ -13,95 +13,10 @@ resource "aws_security_group" "instance" {
   }
 }
 
+## security group specifically for the ALB
 
-
-#
-#resource "aws_instance" "example" {
-#  ami           = "ami-0c5204531f799e0c6"
-#  instance_type = "t2.micro"
-#  vpc_security_group_ids = [aws_security_group.instance.id]
-#
-#  user_data = <<-EOF
-#              #!/bin/bash
-#              echo "Hello, World" > index.html
-#              nohup busybox httpd -f -p 8080 &
-#              EOF
-#
-#  tags = {
-#    Name = "terraform-example"
-#  }
-#}
-#
-#output "public_ip" {
-#  value       = aws_instance.example.public_ip
-#  description = "The public IP address of the web server"
-#}
-#
-
-
-data "aws_vpc" "default" {
-  default = true
-}
-
-data "aws_subnet_ids" "default" {
-  vpc_id = data.aws_vpc.default.id
-}
-
-variable "server_port" {
-  description = "The port the server will use for HTTP requests"
-  type        = number
-  default     = 8080
-}
-
-
-
-
-resource "aws_launch_configuration" "example" {
-  image_id        = "ami-04590e7389a6e577c"
-  instance_type   = "t2.micro"
-  security_groups = [aws_security_group.instance.id]
-
-  user_data = <<-EOF
-              #!/bin/bash
-              echo "Hello, World" > index.html
-              nohup busybox httpd -f -p ${var.server_port} &
-              EOF
-}
-
-
-
-
-
-resource "aws_lb" "example" {
-  name               = "terraform-asg-example"
-  load_balancer_type = "application"
-  subnets            = data.aws_subnet_ids.default.ids
-  security_groups    = [aws_security_group.alb.id]
-}
-
-
-
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.example.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  # By default, return a simple 404 page
-  default_action {
-    type = "fixed-response"
-
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "404: page not found"
-      status_code  = 404
-    }
-  }
-}
-
-
-
-resource "aws_security_group" "alb" {
-  name = "terraform-example-alb"
+resource "aws_security_group" "alb-sg" {
+  name = "alb security group"
 
   # Allow inbound HTTP requests
   ingress {
@@ -121,6 +36,75 @@ resource "aws_security_group" "alb" {
 }
 
 
+
+
+
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnet_ids" "default" {
+  vpc_id = data.aws_vpc.default.id
+}
+
+variable "server_port" {
+  description = "The port the server will use for HTTP requests"
+  type        = number
+  default     = 8080
+}
+
+
+
+
+resource "aws_launch_configuration" "example_launch_configuration" {
+  image_id        = "ami-04590e7389a6e577c"
+  instance_type   = "t2.micro"
+  security_groups = [aws_security_group.instance.id]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              echo "Hello, World" > index.html
+              nohup busybox httpd -f -p ${var.server_port} &
+              EOF
+}
+
+
+
+## Load balancer (alb type) with the security group defined for ALBs
+
+resource "aws_lb" "my_app_load_balancer" {
+  name               = "terraform-asg-example"
+  load_balancer_type = "application"
+  subnets            = data.aws_subnet_ids.default.ids
+  security_groups    = [aws_security_group.alb.id]
+}
+
+
+## define a listener for ALB using the aws_lb_listener resource
+## This listener configures the ALB to listen on the default HTTP port, port 80, use HTTP as the protocol,
+## and send a simple 404 page as the default response for requests that don’t match any listener rules
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.my_app_load_balancer.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  # By default, return a simple 404 page
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "404: page not found"
+      status_code  = 404
+    }
+  }
+}
+
+
+## Target group for the Auto scaling group
+
 resource "aws_lb_target_group" "asg" {
   name     = "terraform-asg-example"
   port     = var.server_port
@@ -139,8 +123,8 @@ resource "aws_lb_target_group" "asg" {
 }
 
 
-resource "aws_autoscaling_group" "example" {
-  launch_configuration = aws_launch_configuration.example.name
+resource "aws_autoscaling_group" "my_auto_scaling_group" {
+  launch_configuration = aws_launch_configuration.example_launch_configuration.name
   vpc_zone_identifier  = data.aws_subnet_ids.default.ids
 
   target_group_arns = [aws_lb_target_group.asg.arn]
@@ -156,6 +140,8 @@ resource "aws_autoscaling_group" "example" {
   }
 }
 
+
+## adds a listener rule that send requests that match any path to the target group that contains your ASG.
 
 resource "aws_lb_listener_rule" "asg" {
   listener_arn = aws_lb_listener.http.arn
@@ -174,6 +160,6 @@ resource "aws_lb_listener_rule" "asg" {
 
 
 output "alb_dns_name" {
-  value       = aws_lb.example.dns_name
+  value       = aws_lb.my_app_load_balancer.dns_name
   description = "The domain name of the load balancer"
 }
